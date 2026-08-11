@@ -12,7 +12,8 @@ let
     vcpu mem balloon initialBalloonMem hotplugMem hotpluggedMem user volumes shares
     socket devices vsock graphics credentialFiles
     kernel initrdPath storeDisk storeOnDisk;
-  inherit (microvmConfig.crosvm) pivotRoot extraArgs;
+  inherit (microvmConfig.crosvm)
+    pivotRoot extraArgs deviceTreeOverlays memoryBase platformMmio;
 
   crosvmPkg = microvmConfig.crosvm.package;
 
@@ -61,7 +62,7 @@ in {
     else lib.escapeShellArgs (
       [
         "${crosvmPkg}/bin/crosvm" "run"
-        "-m" (toString mem)
+        "--mem" (if memoryBase == null then toString mem else "size=${toString mem},base=${toString memoryBase}")
         "-c" (toString vcpu)
         "--serial" "type=stdout,console=true,stdin=true"
         "-p" "console=ttyS0 reboot=k panic=1 ${toString microvmConfig.kernelParams}"
@@ -136,14 +137,31 @@ in {
         "--vsock" (toString vsock.cid)
       ]
       ++
+      lib.optionals (platformMmio != null) [
+        "--platform-mmio"
+        "base=${toString platformMmio.base},size=${toString platformMmio.size}"
+      ]
+      ++
+      builtins.concatMap (overlay: [
+        "--device-tree-overlay"
+        overlay
+      ]) deviceTreeOverlays
+      ++
       [
         "--initrd" initrdPath
         kernelPath
       ]
     )
-    + " " + # Move vfio-pci outside of
-      lib.concatStringsSep " " (lib.concatMap ({ bus, path, ... }: {
-        pci = [ "--vfio" "/sys/bus/pci/devices/${path},iommu=viommu" ];
+    + " " + # Keep host device paths outside of the Nix store.
+      lib.escapeShellArgs (lib.concatMap ({ bus, path, crosvm, ... }: {
+        pci = [
+          "--vfio"
+          "/sys/bus/pci/devices/${path},iommu=${crosvm.iommu}${lib.optionalString (crosvm.guestAddress != null) ",guest-address=${crosvm.guestAddress}"}${lib.optionalString (crosvm.dtSymbol != null) ",dt-symbol=${crosvm.dtSymbol}"}"
+        ];
+        platform = [
+          "--vfio"
+          "/sys/bus/platform/devices/${path},iommu=${crosvm.iommu},dt-symbol=${crosvm.dtSymbol}${lib.optionalString (crosvm.mmioBase != null) ",mmio-base=${toString crosvm.mmioBase}"}${lib.optionalString crosvm.mapEarly ",map-early=true"}"
+        ];
         usb = throw "USB passthrough is not supported on crosvm";
       }.${bus}) devices)
     + " " + lib.escapeShellArgs extraArgs;
