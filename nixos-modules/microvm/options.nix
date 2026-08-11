@@ -375,7 +375,7 @@ in
     };
 
     devices = mkOption {
-      description = "PCI/USB devices that are passed from the host to the MicroVM";
+      description = "PCI/platform/USB devices that are passed from the host to the MicroVM";
       default = [];
       example = literalExpression /* nix */ ''
         [ {
@@ -391,12 +391,12 @@ in
           path = "vendorid=0xabcd,productid=0x0123";
         } ]
       '';
-      type = with types; listOf (submodule {
+      type = with types; listOf (submodule ({ config, ... }: {
         options = {
           bus = mkOption {
-            type = enum [ "pci" "usb" ];
+            type = enum [ "pci" "platform" "usb" ];
             description = ''
-              Device is either on the `pci` or the `usb` bus
+              Bus that identifies the host device.
             '';
           };
           path = mkOption {
@@ -412,8 +412,46 @@ in
               Device additional arguments (optional)
             '';
           };
+          crosvm.dtSymbol = mkOption {
+            type = nullOr str;
+            default = null;
+            description = ''
+              Device-tree symbol that labels this device in a Crosvm overlay.
+              This is required for platform devices.
+            '';
+          };
+          crosvm.guestAddress = mkOption {
+            type = nullOr str;
+            default = null;
+            description = ''
+              PCI address assigned to this device in the Crosvm guest.
+              This is useful when the host PCI domain cannot be represented
+              in Crosvm's guest PCI topology.
+            '';
+          };
+          crosvm.mmioBase = mkOption {
+            type = nullOr ints.unsigned;
+            default = null;
+            description = ''
+              Exact guest physical address for a single-region Crosvm
+              platform device.
+            '';
+          };
+          crosvm.mapEarly = mkOption {
+            type = bool;
+            default = false;
+            description = ''
+              Map this Crosvm platform device before guest execution starts.
+            '';
+          };
+          crosvm.iommu = mkOption {
+            type = enum [ "off" "viommu" "coiommu" "pkvm-iommu" ];
+            default = if config.bus == "platform" then "off" else "viommu";
+            defaultText = literalExpression ''if config.bus == "platform" then "off" else "viommu"'';
+            description = "Crosvm IOMMU mode for this device.";
+          };
         };
-      });
+      }));
     };
 
     vsock.cid = mkOption {
@@ -525,6 +563,38 @@ in
       type = with types; listOf str;
       default = [];
       description = "Extra arguments to pass to crosvm.";
+    };
+
+    crosvm.deviceTreeOverlays = mkOption {
+      type = with types; listOf str;
+      default = [];
+      description = "Device-tree overlay filenames passed to Crosvm.";
+    };
+
+    crosvm.memoryBase = mkOption {
+      type = with types; nullOr ints.unsigned;
+      default = null;
+      description = ''
+        Base guest physical address of Crosvm RAM. When set, Crosvm receives
+        the memory size and base as one typed memory-layout argument.
+      '';
+    };
+
+    crosvm.platformMmio = mkOption {
+      type = with types; nullOr (submodule {
+        options = {
+          base = mkOption {
+            type = ints.unsigned;
+            description = "Base guest physical address of the Crosvm platform MMIO aperture.";
+          };
+          size = mkOption {
+            type = ints.positive;
+            description = "Size in bytes of the Crosvm platform MMIO aperture.";
+          };
+        };
+      });
+      default = null;
+      description = "Explicit Crosvm platform MMIO aperture.";
     };
 
     crosvm.pivotRoot = mkOption {
